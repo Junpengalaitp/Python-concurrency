@@ -1,34 +1,62 @@
 # thumbnail_maker.py
+# intro branch
 import time
 import os
 import logging
 from urllib.parse import urlparse
 from urllib.request import urlretrieve
+import threading
 
 import PIL
 from PIL import Image
 
-logging.basicConfig(filename='logfile.log', level=logging.DEBUG)
+FORMAT = '[%(threadName)s, %(asctime)s, %(levelname)s] %(message)s'
+logging.basicConfig(filename='logfile.log', level=logging.DEBUG, format=FORMAT)
+
 
 class ThumbnailMakerService:
     def __init__(self, home_dir='.'):
         self.home_dir = home_dir
         self.input_dir = self.home_dir + os.path.sep + 'incoming'
         self.output_dir = self.home_dir + os.path.sep + 'outgoing'
+        self.downloaded_bytes = 0
+        self.dl_lock = threading.Lock()
+        max_concurrent_dl = 4
+        self.dl_sem = threading.Semaphore(max_concurrent_dl)
+
+    def download_image(self, url):
+        # download each image and save to the input dir
+        self.dl_sem.acquire()
+        try:
+            logging.info('downloading image at URL ' + url)
+            img_filename = urlparse(url).path.split('/')[-1]
+            dest_path = self.input_dir + os.path.sep + img_filename
+            urlretrieve(url, dest_path)
+            img_size = os.path.getsize(dest_path)
+            with self.dl_lock:
+                self.downloaded_bytes += img_size
+            logging.info(f'image [{img_size} bytes] saved to {dest_path}')
+        finally:
+            self.dl_sem.release()
 
     def download_images(self, img_url_list):
         # validate inputs
         if not img_url_list:
             return
         os.makedirs(self.input_dir, exist_ok=True)
-        
+
         logging.info("beginning image downloads")
 
         start = time.perf_counter()
+        threads = []
         for url in img_url_list:
-            # download each image and save to the input dir 
-            img_filename = urlparse(url).path.split('/')[-1]
-            urlretrieve(url, self.input_dir + os.path.sep + img_filename)
+            t = threading.Thread(target=self.download_image, args=(url,))
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
         end = time.perf_counter()
 
         logging.info(f"downloaded {len(img_url_list)} images in {end - start} seconds")
@@ -69,7 +97,7 @@ class ThumbnailMakerService:
         start = time.perf_counter()
 
         self.download_images(img_url_list)
-        self.perform_resizing()
+        # self.perform_r esizing()
 
         end = time.perf_counter()
         logging.info(f"END make_thumbnails in {end - start} seconds")
